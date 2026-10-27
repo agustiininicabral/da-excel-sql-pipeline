@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from dq_pipeline.cli import build_parser, main
 from dq_pipeline.pipeline import _basic_clean, run_pipeline
 
 
@@ -65,7 +66,7 @@ def test_pipeline_supports_custom_table_and_key_and_writes_reports(
     output = tmp_path / "outputs"
     cleaned = output / "cleaned.xlsx"
 
-    run_pipeline(
+    passed = run_pipeline(
         excel_path=str(source),
         sheet="Ventas",
         table="sales_data",
@@ -76,6 +77,8 @@ def test_pipeline_supports_custom_table_and_key_and_writes_reports(
         cleaned_excel_path=str(cleaned),
     )
 
+    assert passed is False
+    assert "## Result: FAIL" in (output / "report.md").read_text(encoding="utf-8")
     assert cleaned.is_file()
     assert (output / "profile_summary.csv").is_file()
     assert (output / "rules_results.csv").is_file()
@@ -98,7 +101,7 @@ def test_pipeline_skips_duplicate_key_rule_when_no_key_is_configured(
     _write_sales(source)
     output = tmp_path / "outputs"
 
-    run_pipeline(
+    passed = run_pipeline(
         excel_path=str(source),
         sheet="Ventas",
         table="sales",
@@ -109,6 +112,8 @@ def test_pipeline_skips_duplicate_key_rule_when_no_key_is_configured(
         cleaned_excel_path=str(output / "cleaned.xlsx"),
     )
 
+    assert passed is True
+    assert "## Result: PASS" in (output / "report.md").read_text(encoding="utf-8")
     rules = pd.read_csv(output / "rules_results.csv")
     assert rules["rule_id"].tolist() == ["R001", "R002", "R003"]
 
@@ -126,3 +131,78 @@ def test_pipeline_rejects_unsafe_table_identifiers(tmp_path: Path, table: str) -
             out_dir=str(tmp_path / "outputs"),
             cleaned_excel_path=str(tmp_path / "outputs" / "cleaned.xlsx"),
         )
+
+
+def test_pipeline_rejects_duplicate_headers_after_trimming(tmp_path: Path) -> None:
+    source = tmp_path / "duplicate_headers.xlsx"
+    pd.DataFrame([["A", "B"]], columns=["producto", " producto "]).to_excel(
+        source, index=False
+    )
+    with pytest.raises(
+        ValueError, match="Duplicate column names after trimming: producto"
+    ):
+        run_pipeline(
+            excel_path=str(source),
+            sheet=0,
+            table="ventas",
+            key=None,
+            db_path=str(tmp_path / "data" / "pipeline.db"),
+            rules_path=str(ROOT / "sql" / "rules.sql"),
+            out_dir=str(tmp_path / "outputs"),
+            cleaned_excel_path=str(tmp_path / "outputs" / "cleaned.xlsx"),
+        )
+
+
+def test_pipeline_rejects_missing_key_column(tmp_path: Path) -> None:
+    source = tmp_path / "sales.xlsx"
+    _write_sales(source)
+    with pytest.raises(ValueError, match="Key column 'missing_id' not found"):
+        run_pipeline(
+            excel_path=str(source),
+            sheet="Ventas",
+            table="sales",
+            key="missing_id",
+            db_path=str(tmp_path / "data" / "pipeline.db"),
+            rules_path=str(ROOT / "sql" / "rules.sql"),
+            out_dir=str(tmp_path / "outputs"),
+            cleaned_excel_path=str(tmp_path / "outputs" / "cleaned.xlsx"),
+        )
+
+
+def test_cli_parses_numeric_sheet_index_as_integer() -> None:
+    args = build_parser().parse_args([
+        "run", "--excel", "demo.xlsx", "--sheet", "0", "--table", "ventas"
+    ])
+    assert args.sheet == 0
+    assert isinstance(args.sheet, int)
+
+
+def test_cli_returns_nonzero_when_sql_rules_fail(tmp_path: Path) -> None:
+    source = tmp_path / "sales.xlsx"
+    _write_sales(source)
+    result = main([
+        "run",
+        "--excel", str(source),
+        "--sheet", "Ventas",
+        "--table", "ventas",
+        "--key", "sale_id",
+        "--db", str(tmp_path / "data" / "pipeline.db"),
+        "--rules", str(ROOT / "sql" / "rules.sql"),
+        "--out", str(tmp_path / "outputs"),
+        "--cleaned-excel", str(tmp_path / "outputs" / "cleaned.xlsx"),
+    ])
+    assert result == 1
+
+
+def test_cli_returns_two_for_missing_workbook(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = main([
+        "run", "--excel", str(tmp_path / "missing.xlsx"),
+        "--table", "ventas",
+        "--db", str(tmp_path / "data" / "pipeline.db"),
+        "--rules", str(ROOT / "sql" / "rules.sql"),
+        "--out", str(tmp_path / "outputs"),
+    ])
+    assert result == 2
+    assert "ERROR:" in capsys.readouterr().err

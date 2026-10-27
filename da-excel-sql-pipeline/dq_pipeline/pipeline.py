@@ -39,7 +39,13 @@ def _ensure_dirs(out_dir: str, db_path: str) -> None:
 
 def _read_excel(excel_path: str, sheet: str | int) -> pd.DataFrame:
     dataframe = pd.read_excel(excel_path, sheet_name=sheet, engine="openpyxl")
-    dataframe.columns = [str(column).strip() for column in dataframe.columns]
+    columns = [str(column).strip() for column in dataframe.columns]
+    duplicates = sorted({column for column in columns if columns.count(column) > 1})
+    if duplicates:
+        raise ValueError(
+            "Duplicate column names after trimming: " + ", ".join(duplicates)
+        )
+    dataframe.columns = columns
     return dataframe
 
 
@@ -156,8 +162,11 @@ def _write_report(
 
     passed = int((rules_df["status"] == "PASS").sum()) if "status" in rules_df else 0
     failed = int((rules_df["status"] == "FAIL").sum()) if "status" in rules_df else 0
+    result = "PASS" if failed == 0 else "FAIL"
     lines = [
         "# Data Quality Report",
+        "",
+        f"## Result: {result}",
         "",
         f"- Generated at: **{metadata['generated_at']}**",
         f"- Source Excel: **{metadata['excel_path']}**",
@@ -189,7 +198,7 @@ def run_pipeline(
     rules_path: str,
     out_dir: str,
     cleaned_excel_path: str,
-) -> None:
+) -> bool:
     _validate_identifier(table, "table name")
     if key is not None:
         _validate_identifier(key, "key column")
@@ -210,6 +219,8 @@ def run_pipeline(
     cleaned_dataframe = _basic_clean(raw_dataframe)
     if cleaned_dataframe.empty:
         raise ValueError("No non-empty rows remain after cleaning the input workbook.")
+    if key is not None and key not in cleaned_dataframe.columns:
+        raise ValueError(f"Key column {key!r} not found in input headers.")
 
     os.makedirs(os.path.dirname(config.cleaned_excel_path) or ".", exist_ok=True)
     cleaned_dataframe.to_excel(
@@ -223,6 +234,18 @@ def run_pipeline(
     with open(config.rules_path, encoding="utf-8") as rules_file:
         statements = _prepare_rules_sql(rules_file.read(), config.table, config.key)
     rules_df = _run_rules(config.db_path, statements)
+    if rules_df.empty:
+        raise ValueError("No SQL rule results were produced.")
+    required_rule_columns = {"rule_id", "rule_name", "status", "details"}
+    missing_columns = required_rule_columns - set(rules_df.columns)
+    if missing_columns:
+        raise ValueError(
+            "SQL rule results are missing required columns: "
+            + ", ".join(sorted(missing_columns))
+        )
+    if rules_df["status"].isna().any() or not rules_df["status"].isin(["PASS", "FAIL"]).all():
+        raise ValueError("SQL rule status values must be PASS or FAIL.")
+    passed = not rules_df["status"].eq("FAIL").any()
 
     metadata = {
         "generated_at": datetime.now(UTC).isoformat(),
@@ -232,7 +255,8 @@ def run_pipeline(
     }
     _write_report(profile_df, rules_df, config.out_dir, metadata)
 
-    print("OK - Pipeline finished")
+    print(f"{'PASS' if passed else 'FAIL'} - Pipeline finished")
     print(f"- Cleaned Excel: {config.cleaned_excel_path}")
     print(f"- SQLite DB: {config.db_path}")
     print(f"- Outputs: {config.out_dir}")
+    return passed

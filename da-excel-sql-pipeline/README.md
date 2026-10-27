@@ -70,3 +70,12 @@ python -m pytest -q
 GitHub Actions ejecuta las mismas comprobaciones desde la raíz del repositorio y prueba la demo incluida.
 
 Los nombres de tabla y de clave se validan como identificadores SQL antes de construir consultas. Si no se indica `--key`, la regla de duplicados por clave se omite. Los valores de texto vacíos se conservan como nulos para que el profiling los detecte, en lugar de convertirlos en el texto literal `nan`.
+
+
+## Exit codes and validation behavior
+
+- `0`: every SQL rule returns `PASS`.
+- `1`: the pipeline completed and at least one SQL rule returned `FAIL`; reports and cleaned outputs are still generated.
+- `2`: an input, configuration, SQL, or output error prevented a valid evaluation. The CLI prints a concise error to stderr.
+
+The included demo intentionally contains a duplicate `sale_id`, so it should return `1` and produce a `FAIL` report. Numeric `--sheet` arguments are parsed as zero-based Excel sheet indexes. Duplicate headers after trimming and configured key columns that do not exist are rejected before loading data into SQLite.

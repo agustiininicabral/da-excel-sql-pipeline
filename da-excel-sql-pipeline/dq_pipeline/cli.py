@@ -1,9 +1,18 @@
 import argparse
+import sqlite3
+import sys
 
 from .pipeline import run_pipeline
 
 
-def main() -> None:
+def _parse_sheet(value: str) -> str | int:
+    try:
+        return int(value)
+    except ValueError:
+        return value
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="dq_pipeline",
         description="Excel → SQLite → SQL rules → Report",
@@ -14,6 +23,7 @@ def main() -> None:
     run_parser.add_argument("--excel", required=True, help="Path to Excel (.xlsx)")
     run_parser.add_argument(
         "--sheet",
+        type=_parse_sheet,
         default=0,
         help="Sheet name or index (default: 0)",
     )
@@ -48,18 +58,24 @@ def main() -> None:
         help="Cleaned Excel output path",
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.cmd == "run":
-        run_pipeline(
-            excel_path=args.excel,
-            sheet=args.sheet,
-            table=args.table,
-            key=args.key,
-            db_path=args.db,
-            rules_path=args.rules,
-            out_dir=args.out,
-            cleaned_excel_path=args.cleaned_excel,
-        )
+        try:
+            passed = run_pipeline(
+                excel_path=args.excel,
+                sheet=args.sheet,
+                table=args.table,
+                key=args.key,
+                db_path=args.db,
+                rules_path=args.rules,
+                out_dir=args.out,
+                cleaned_excel_path=args.cleaned_excel,
+            )
+        except (OSError, ValueError, sqlite3.Error) as error:
+            print(f"ERROR: {error}", file=sys.stderr)
+            return 2
+        return 0 if passed else 1
+    return 2
 
 
 if __name__ == "__main__":
