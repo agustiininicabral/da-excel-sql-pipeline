@@ -170,9 +170,9 @@ def test_pipeline_rejects_missing_key_column(tmp_path: Path) -> None:
 
 
 def test_cli_parses_numeric_sheet_index_as_integer() -> None:
-    args = build_parser().parse_args([
-        "run", "--excel", "demo.xlsx", "--sheet", "0", "--table", "ventas"
-    ])
+    args = build_parser().parse_args(
+        ["run", "--excel", "demo.xlsx", "--sheet", "0", "--table", "ventas"]
+    )
     assert args.sheet == 0
     assert isinstance(args.sheet, int)
 

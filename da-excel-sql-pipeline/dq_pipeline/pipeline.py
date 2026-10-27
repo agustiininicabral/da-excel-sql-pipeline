@@ -243,7 +243,10 @@ def run_pipeline(
             "SQL rule results are missing required columns: "
             + ", ".join(sorted(missing_columns))
         )
-    if rules_df["status"].isna().any() or not rules_df["status"].isin(["PASS", "FAIL"]).all():
+    if (
+        rules_df["status"].isna().any()
+        or not rules_df["status"].isin(["PASS", "FAIL"]).all()
+    ):
         raise ValueError("SQL rule status values must be PASS or FAIL.")
     passed = not rules_df["status"].eq("FAIL").any()
 
