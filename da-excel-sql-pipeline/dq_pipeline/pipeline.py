@@ -1,146 +1,192 @@
 from __future__ import annotations
+
 import os
+import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Optional, Any
+from datetime import datetime, timezone
+from typing import Any
 
 import pandas as pd
+
+IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 
 @dataclass
 class PipelineConfig:
     excel_path: str
-    sheet: Any
+    sheet: str | int
     table: str
-    key: Optional[str]
+    key: str | None
     db_path: str
     rules_path: str
     out_dir: str
     cleaned_excel_path: str
 
-def _ensure_dirs(out_dir: str, db_path: str):
+
+def _validate_identifier(value: str, label: str) -> None:
+    if not IDENTIFIER_PATTERN.fullmatch(value):
+        raise ValueError(
+            f"Invalid {label} {value!r}. Use letters, digits, and underscores; "
+            "the first character must be a letter or underscore."
+        )
+
+
+def _ensure_dirs(out_dir: str, db_path: str) -> None:
     os.makedirs(out_dir, exist_ok=True)
     os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
 
-def _read_excel(excel_path: str, sheet: Any) -> pd.DataFrame:
-    df = pd.read_excel(excel_path, sheet_name=sheet, engine="openpyxl")
-    # Normalizar nombres de columnas (limpia espacios)
-    df.columns = [str(c).strip() for c in df.columns]
-    return df
 
-def _basic_clean(df: pd.DataFrame) -> pd.DataFrame:
-    # Quita filas completamente vacías
-    df2 = df.dropna(how="all").copy()
+def _read_excel(excel_path: str, sheet: str | int) -> pd.DataFrame:
+    dataframe = pd.read_excel(excel_path, sheet_name=sheet, engine="openpyxl")
+    dataframe.columns = [str(column).strip() for column in dataframe.columns]
+    return dataframe
 
-    # Trim en strings
-    for col in df2.columns:
-        if pd.api.types.is_string_dtype(df2[col]):
-            df2[col] = df2[col].astype(str).str.strip()
 
-    return df2
+def _basic_clean(dataframe: pd.DataFrame) -> pd.DataFrame:
+    cleaned = dataframe.dropna(how="all").copy()
+    for column in cleaned.columns:
+        if pd.api.types.is_object_dtype(cleaned[column]) or pd.api.types.is_string_dtype(
+            cleaned[column]
+        ):
+            cleaned[column] = cleaned[column].astype("string").str.strip()
+            cleaned[column] = cleaned[column].replace("", pd.NA)
+    return cleaned
 
-def _profile(df: pd.DataFrame, key: Optional[str]) -> pd.DataFrame:
+
+def _profile(dataframe: pd.DataFrame, key: str | None) -> pd.DataFrame:
     rows = []
-    total = len(df)
+    total = len(dataframe)
 
-    for col in df.columns:
-        s = df[col]
-        nulls = int(s.isna().sum())
-        nunique = int(s.nunique(dropna=True))
-        dtype = str(s.dtype)
+    for column in dataframe.columns:
+        series = dataframe[column]
+        null_count = int(series.isna().sum())
+        rows.append(
+            {
+                "column": column,
+                "dtype": str(series.dtype),
+                "total_rows": total,
+                "null_count": null_count,
+                "null_pct": round(null_count / total * 100, 2) if total else 0.0,
+                "unique_count": int(series.nunique(dropna=True)),
+            }
+        )
 
-        rows.append({
-            "column": col,
-            "dtype": dtype,
-            "total_rows": total,
-            "null_count": nulls,
-            "null_pct": round((nulls / total * 100), 2) if total else 0.0,
-            "unique_count": nunique
-        })
+    profile = pd.DataFrame(rows).sort_values(
+        ["null_count", "unique_count"],
+        ascending=[False, True],
+    )
+    if key and key in dataframe.columns:
+        key_nulls = int(dataframe[key].isna().sum())
+        duplicate_rows = int(dataframe[key].duplicated(keep=False).sum())
+        key_profile = pd.DataFrame(
+            [
+                {
+                    "column": key,
+                    "dtype": str(dataframe[key].dtype),
+                    "total_rows": total,
+                    "null_count": key_nulls,
+                    "null_pct": round(key_nulls / total * 100, 2) if total else 0.0,
+                    "unique_count": int(dataframe[key].nunique(dropna=True)),
+                    "note": f"duplicated_rows_by_key={duplicate_rows}",
+                }
+            ]
+        )
+        profile = pd.concat([profile, key_profile], ignore_index=True)
 
-    prof = pd.DataFrame(rows).sort_values(["null_count", "unique_count"], ascending=[False, True])
+    return profile
 
-    # duplicados por clave
-    if key and key in df.columns:
-        dup_ids = int(df[key].duplicated(keep=False).sum())
-        prof = pd.concat([prof, pd.DataFrame([{
-            "column": key,
-            "dtype": str(df[key].dtype),
-            "total_rows": total,
-            "null_count": int(df[key].isna().sum()),
-            "null_pct": round((int(df[key].isna().sum()) / total * 100), 2) if total else 0.0,
-            "unique_count": int(df[key].nunique(dropna=True)),
-            "note": f"duplicated_rows_by_key={dup_ids}"
-        }])], ignore_index=True)
 
-    return prof
+def _to_sqlite(dataframe: pd.DataFrame, db_path: str, table: str) -> None:
+    with sqlite3.connect(db_path) as connection:
+        dataframe.to_sql(table, connection, if_exists="replace", index=False)
 
-def _to_sqlite(df: pd.DataFrame, db_path: str, table: str):
-    with sqlite3.connect(db_path) as con:
-        df.to_sql(table, con, if_exists="replace", index=False)
 
-def _run_rules(db_path: str, rules_sql: str) -> pd.DataFrame:
-    with sqlite3.connect(db_path) as con:
-        # Ejecuta múltiples SELECT en un solo script:
-        # En SQLite, ejecutamos statement por statement para capturar resultados.
-        cur = con.cursor()
-        statements = [s.strip() for s in rules_sql.split(";") if s.strip()]
-        results = []
-        for stmt in statements:
-            cur.execute(stmt)
-            cols = [d[0] for d in cur.description] if cur.description else []
-            rows = cur.fetchall()
-            for r in rows:
-                results.append(dict(zip(cols, r)))
-        return pd.DataFrame(results)
+def _prepare_rules_sql(rules_sql: str, table: str, key: str | None) -> list[str]:
+    statements = [statement.strip() for statement in rules_sql.split(";") if statement.strip()]
+    prepared = []
+    for statement in statements:
+        if "'R004' AS rule_id" in statement:
+            if key is None:
+                continue
+            statement = re.sub(r"\bSELECT\s+id_venta\b", f'SELECT "{key}"', statement)
+            statement = re.sub(r"\bGROUP BY\s+id_venta\b", f'GROUP BY "{key}"', statement)
+            statement = statement.replace("Duplicados por id_venta", f"Duplicados por {key}")
 
-def _write_report(profile_df: pd.DataFrame, rules_df: pd.DataFrame, out_dir: str, meta: dict):
+        statement = re.sub(
+            r"\bFROM\s+ventas\b",
+            f'FROM "{table}"',
+            statement,
+            flags=re.IGNORECASE,
+        )
+        prepared.append(statement)
+
+    return prepared
+
+
+def _run_rules(db_path: str, statements: list[str]) -> pd.DataFrame:
+    results = []
+    with sqlite3.connect(db_path) as connection:
+        for statement in statements:
+            cursor = connection.execute(statement)
+            columns = [description[0] for description in cursor.description or []]
+            for row in cursor.fetchall():
+                results.append(dict(zip(columns, row)))
+    return pd.DataFrame(results)
+
+
+def _write_report(
+    profile_df: pd.DataFrame,
+    rules_df: pd.DataFrame,
+    out_dir: str,
+    metadata: dict[str, Any],
+) -> None:
     profile_path = os.path.join(out_dir, "profile_summary.csv")
     rules_path = os.path.join(out_dir, "rules_results.csv")
-    md_path = os.path.join(out_dir, "report.md")
+    markdown_path = os.path.join(out_dir, "report.md")
 
     profile_df.to_csv(profile_path, index=False, encoding="utf-8")
     rules_df.to_csv(rules_path, index=False, encoding="utf-8")
 
-    # Markdown report (simple y presentable)
-    passed = int((rules_df["status"] == "PASS").sum()) if "status" in rules_df.columns else 0
-    failed = int((rules_df["status"] == "FAIL").sum()) if "status" in rules_df.columns else 0
+    passed = int((rules_df["status"] == "PASS").sum()) if "status" in rules_df else 0
+    failed = int((rules_df["status"] == "FAIL").sum()) if "status" in rules_df else 0
+    lines = [
+        "# Data Quality Report",
+        "",
+        f"- Generated at: **{metadata['generated_at']}**",
+        f"- Source Excel: **{metadata['excel_path']}**",
+        f"- Table: **{metadata['table']}**",
+        f"- Rows loaded: **{metadata['rows_loaded']}**",
+        "",
+        "## Rules summary",
+        f"- PASS: **{passed}**",
+        f"- FAIL: **{failed}**",
+        "",
+        "## Rules details",
+        rules_df.to_markdown(index=False) if not rules_df.empty else "_No rules executed._",
+        "",
+        "## Profiling (top 25 by null_count)",
+        profile_df.head(25).to_markdown(index=False),
+    ]
+    with open(markdown_path, "w", encoding="utf-8") as report:
+        report.write("\n".join(lines))
 
-    md = []
-    md.append("# Data Quality Report")
-    md.append("")
-    md.append(f"- Generated at: **{meta['generated_at']}**")
-    md.append(f"- Source Excel: **{meta['excel_path']}**")
-    md.append(f"- Table: **{meta['table']}**")
-    md.append(f"- Rows loaded: **{meta['rows_loaded']}**")
-    md.append("")
-    md.append("## Rules summary")
-    md.append(f"- PASS: **{passed}**")
-    md.append(f"- FAIL: **{failed}**")
-    md.append("")
-    md.append("## Rules details")
-    if len(rules_df) == 0:
-        md.append("_No rules executed._")
-    else:
-        md.append(rules_df.to_markdown(index=False))
-    md.append("")
-    md.append("## Profiling (top 25 by null_count)")
-    md.append(profile_df.head(25).to_markdown(index=False))
-
-    with open(md_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(md))
 
 def run_pipeline(
     excel_path: str,
-    sheet: Any,
+    sheet: str | int,
     table: str,
-    key: Optional[str],
+    key: str | None,
     db_path: str,
     rules_path: str,
     out_dir: str,
-    cleaned_excel_path: str
-):
-    cfg = PipelineConfig(
+    cleaned_excel_path: str,
+) -> None:
+    _validate_identifier(table, "table name")
+    if key is not None:
+        _validate_identifier(key, "key column")
+
+    config = PipelineConfig(
         excel_path=excel_path,
         sheet=sheet,
         table=table,
@@ -148,46 +194,37 @@ def run_pipeline(
         db_path=db_path,
         rules_path=rules_path,
         out_dir=out_dir,
-        cleaned_excel_path=cleaned_excel_path
+        cleaned_excel_path=cleaned_excel_path,
     )
+    _ensure_dirs(config.out_dir, config.db_path)
 
-    _ensure_dirs(cfg.out_dir, cfg.db_path)
+    raw_dataframe = _read_excel(config.excel_path, config.sheet)
+    cleaned_dataframe = _basic_clean(raw_dataframe)
+    if cleaned_dataframe.empty:
+        raise ValueError("No non-empty rows remain after cleaning the input workbook.")
 
-    df_raw = _read_excel(cfg.excel_path, cfg.sheet)
-    df_clean = _basic_clean(df_raw)
+    os.makedirs(os.path.dirname(config.cleaned_excel_path) or ".", exist_ok=True)
+    cleaned_dataframe.to_excel(
+        config.cleaned_excel_path,
+        index=False,
+        engine="openpyxl",
+    )
+    _to_sqlite(cleaned_dataframe, config.db_path, config.table)
 
-    # Guarda cleaned Excel
-    os.makedirs(os.path.dirname(cfg.cleaned_excel_path) or ".", exist_ok=True)
-    df_clean.to_excel(cfg.cleaned_excel_path, index=False, engine="openpyxl")
+    profile_df = _profile(cleaned_dataframe, config.key)
+    with open(config.rules_path, encoding="utf-8") as rules_file:
+        statements = _prepare_rules_sql(rules_file.read(), config.table, config.key)
+    rules_df = _run_rules(config.db_path, statements)
 
-    # Load to SQLite
-    _to_sqlite(df_clean, cfg.db_path, cfg.table)
-
-    # Profiling
-    profile_df = _profile(df_clean, cfg.key)
-
-    # Run rules
-    with open(cfg.rules_path, "r", encoding="utf-8") as f:
-        rules_sql = f.read()
-
-    # Nota: rules.sql asume tabla 'ventas' por defecto.
-    # Si el usuario eligió otro nombre de tabla, reemplazamos de forma simple:
-    rules_sql = rules_sql.replace("\nFROM ventas\n", f"\nFROM {cfg.table}\n")
-    rules_sql = rules_sql.replace("\nFROM (\n  SELECT COUNT(*) AS cnt\n  FROM ventas\n", f"\nFROM (\n  SELECT COUNT(*) AS cnt\n  FROM {cfg.table}\n")
-    rules_sql = rules_sql.replace("\n  FROM ventas\n", f"\n  FROM {cfg.table}\n")
-
-    rules_df = _run_rules(cfg.db_path, rules_sql)
-
-    meta = {
-        "generated_at": datetime.utcnow().isoformat() + "Z",
-        "excel_path": cfg.excel_path,
-        "table": cfg.table,
-        "rows_loaded": int(len(df_clean))
+    metadata = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "excel_path": config.excel_path,
+        "table": config.table,
+        "rows_loaded": int(len(cleaned_dataframe)),
     }
-
-    _write_report(profile_df, rules_df, cfg.out_dir, meta)
+    _write_report(profile_df, rules_df, config.out_dir, metadata)
 
     print("OK - Pipeline finished")
-    print(f"- Cleaned Excel: {cfg.cleaned_excel_path}")
-    print(f"- SQLite DB:      {cfg.db_path}")
-    print(f"- Outputs:        {cfg.out_dir}")
+    print(f"- Cleaned Excel: {config.cleaned_excel_path}")
+    print(f"- SQLite DB: {config.db_path}")
+    print(f"- Outputs: {config.out_dir}")
