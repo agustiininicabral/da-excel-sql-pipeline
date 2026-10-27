@@ -40,8 +40,19 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
-      - name: Run demo pipeline
-        run: python -m dq_pipeline run --excel examples/ventas_demo.xlsx --sheet Ventas --table ventas --key id_venta
+      - name: Run demo pipeline (expected data-quality failure)
+        run: |
+          set +e
+          python -m dq_pipeline run --excel examples/ventas_demo.xlsx --sheet Ventas --table ventas --key id_venta
+          status=$?
+          set -e
+          if [ "$status" -ne 1 ]; then
+            echo "Expected demo to return 1 for intentional duplicate-key failure; got $status"
+            exit 1
+          fi
+          grep -q "## Result: FAIL" outputs/report.md
+          test -s outputs/cleaned.xlsx
+          test -s outputs/rules_results.csv
 
       - name: Upload outputs
         if: always() && hashFiles('da-excel-sql-pipeline/outputs/*') != ''
