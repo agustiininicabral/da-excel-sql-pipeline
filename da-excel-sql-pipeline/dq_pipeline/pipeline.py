@@ -46,9 +46,9 @@ def _read_excel(excel_path: str, sheet: str | int) -> pd.DataFrame:
 def _basic_clean(dataframe: pd.DataFrame) -> pd.DataFrame:
     cleaned = dataframe.dropna(how="all").copy()
     for column in cleaned.columns:
-        if pd.api.types.is_object_dtype(cleaned[column]) or pd.api.types.is_string_dtype(
+        if pd.api.types.is_object_dtype(
             cleaned[column]
-        ):
+        ) or pd.api.types.is_string_dtype(cleaned[column]):
             cleaned[column] = cleaned[column].astype("string").str.strip()
             cleaned[column] = cleaned[column].replace("", pd.NA)
     return cleaned
@@ -103,15 +103,23 @@ def _to_sqlite(dataframe: pd.DataFrame, db_path: str, table: str) -> None:
 
 
 def _prepare_rules_sql(rules_sql: str, table: str, key: str | None) -> list[str]:
-    statements = [statement.strip() for statement in rules_sql.split(";") if statement.strip()]
+    statements = [
+        statement.strip() for statement in rules_sql.split(";") if statement.strip()
+    ]
     prepared = []
     for statement in statements:
         if "'R004' AS rule_id" in statement:
             if key is None:
                 continue
-            statement = re.sub(r"\bSELECT\s+id_venta\b", f'SELECT "{key}"', statement)
-            statement = re.sub(r"\bGROUP BY\s+id_venta\b", f'GROUP BY "{key}"', statement)
-            statement = statement.replace("Duplicados por id_venta", f"Duplicados por {key}")
+            statement = re.sub(
+                r"\bSELECT\s+id_venta\b", f'SELECT "{key}"', statement
+            )
+            statement = re.sub(
+                r"\bGROUP BY\s+id_venta\b", f'GROUP BY "{key}"', statement
+            )
+            statement = statement.replace(
+                "Duplicados por id_venta", f"Duplicados por {key}"
+            )
 
         statement = re.sub(
             r"\bFROM\s+ventas\b",
@@ -163,7 +171,9 @@ def _write_report(
         f"- FAIL: **{failed}**",
         "",
         "## Rules details",
-        rules_df.to_markdown(index=False) if not rules_df.empty else "_No rules executed._",
+        rules_df.to_markdown(index=False)
+        if not rules_df.empty
+        else "_No rules executed._",
         "",
         "## Profiling (top 25 by null_count)",
         profile_df.head(25).to_markdown(index=False),
