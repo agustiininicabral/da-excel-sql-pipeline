@@ -1,0 +1,53 @@
+name: Excel SQL Data Quality Pipeline
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: da-excel-sql-pipeline
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: da-excel-sql-pipeline/requirements-dev.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Check dependency consistency
+        run: python -m pip check
+
+      - name: Check Python formatting
+        run: ruff format --check dq_pipeline tests
+
+      - name: Run Ruff lint checks
+        run: ruff check dq_pipeline tests
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Run demo pipeline
+        run: python -m dq_pipeline run --excel examples/ventas_demo.xlsx --sheet Ventas --table ventas --key id_venta
+
+      - name: Upload outputs
+        if: always() && hashFiles('da-excel-sql-pipeline/outputs/*') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: data-quality-pipeline-results
+          path: da-excel-sql-pipeline/outputs/
+          if-no-files-found: warn
+          retention-days: 7
