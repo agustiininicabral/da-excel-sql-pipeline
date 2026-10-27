@@ -4,7 +4,7 @@ import os
 import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
@@ -225,10 +225,10 @@ def run_pipeline(
     rules_df = _run_rules(config.db_path, statements)
 
     metadata = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "excel_path": config.excel_path,
         "table": config.table,
-        "rows_loaded": int(len(cleaned_dataframe)),
+        "rows_loaded": len(cleaned_dataframe),
     }
     _write_report(profile_df, rules_df, config.out_dir, metadata)
 
