@@ -207,12 +207,20 @@ def test_cli_returns_nonzero_when_sql_rules_fail(tmp_path: Path) -> None:
 def test_cli_returns_two_for_missing_workbook(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    result = main([
-        "run", "--excel", str(tmp_path / "missing.xlsx"),
-        "--table", "ventas",
-        "--db", str(tmp_path / "data" / "pipeline.db"),
-        "--rules", str(ROOT / "sql" / "rules.sql"),
-        "--out", str(tmp_path / "outputs"),
-    ])
+    result = main(
+        [
+            "run",
+            "--excel",
+            str(tmp_path / "missing.xlsx"),
+            "--table",
+            "ventas",
+            "--db",
+            str(tmp_path / "data" / "pipeline.db"),
+            "--rules",
+            str(ROOT / "sql" / "rules.sql"),
+            "--out",
+            str(tmp_path / "outputs"),
+        ]
+    )
     assert result == 2
     assert "ERROR:" in capsys.readouterr().err
