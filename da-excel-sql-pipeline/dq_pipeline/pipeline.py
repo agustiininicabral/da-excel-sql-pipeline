@@ -111,9 +111,7 @@ def _prepare_rules_sql(rules_sql: str, table: str, key: str | None) -> list[str]
         if "'R004' AS rule_id" in statement:
             if key is None:
                 continue
-            statement = re.sub(
-                r"\bSELECT\s+id_venta\b", f'SELECT "{key}"', statement
-            )
+            statement = re.sub(r"\bSELECT\s+id_venta\b", f'SELECT "{key}"', statement)
             statement = re.sub(
                 r"\bGROUP BY\s+id_venta\b", f'GROUP BY "{key}"', statement
             )
