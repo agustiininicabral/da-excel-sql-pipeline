@@ -180,17 +180,27 @@ def test_cli_parses_numeric_sheet_index_as_integer() -> None:
 def test_cli_returns_nonzero_when_sql_rules_fail(tmp_path: Path) -> None:
     source = tmp_path / "sales.xlsx"
     _write_sales(source)
-    result = main([
-        "run",
-        "--excel", str(source),
-        "--sheet", "Ventas",
-        "--table", "ventas",
-        "--key", "sale_id",
-        "--db", str(tmp_path / "data" / "pipeline.db"),
-        "--rules", str(ROOT / "sql" / "rules.sql"),
-        "--out", str(tmp_path / "outputs"),
-        "--cleaned-excel", str(tmp_path / "outputs" / "cleaned.xlsx"),
-    ])
+    result = main(
+        [
+            "run",
+            "--excel",
+            str(source),
+            "--sheet",
+            "Ventas",
+            "--table",
+            "ventas",
+            "--key",
+            "sale_id",
+            "--db",
+            str(tmp_path / "data" / "pipeline.db"),
+            "--rules",
+            str(ROOT / "sql" / "rules.sql"),
+            "--out",
+            str(tmp_path / "outputs"),
+            "--cleaned-excel",
+            str(tmp_path / "outputs" / "cleaned.xlsx"),
+        ]
+    )
     assert result == 1
 
 
