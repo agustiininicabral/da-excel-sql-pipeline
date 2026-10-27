@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from dq_pipeline.cli import build_parser, main
+from dq_pipeline.cli import _parse_sheet, main
 from dq_pipeline.pipeline import _basic_clean, run_pipeline
 
 
@@ -170,11 +170,9 @@ def test_pipeline_rejects_missing_key_column(tmp_path: Path) -> None:
 
 
 def test_cli_parses_numeric_sheet_index_as_integer() -> None:
-    args = build_parser().parse_args(
-        ["run", "--excel", "demo.xlsx", "--sheet", "0", "--table", "ventas"]
-    )
-    assert args.sheet == 0
-    assert isinstance(args.sheet, int)
+    assert _parse_sheet("0") == 0
+    assert isinstance(_parse_sheet("0"), int)
+    assert _parse_sheet("Ventas") == "Ventas"
 
 
 def test_cli_returns_nonzero_when_sql_rules_fail(tmp_path: Path) -> None:
