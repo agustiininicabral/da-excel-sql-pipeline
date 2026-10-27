@@ -26,7 +26,7 @@ python -m venv .venv
 # macOS/Linux:
 source .venv/bin/activate
 
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
 
 ## Ejecución (demo incluida)
@@ -53,4 +53,20 @@ python -m dq_pipeline run --excel TU_ARCHIVO.xlsx --sheet Hoja1 --table mi_tabla
 - Conectar a PostgreSQL (SQLAlchemy)
 - Generar reportes HTML (Jinja2)
 - Tests automáticos con pytest + GitHub Actions
+- Checks de formato/lint con Ruff y validación de consistencia de dependencias
 - Great Expectations / pandera para validaciones avanzadas
+
+## Pruebas y calidad
+
+Desde esta carpeta:
+
+```powershell
+python -m pip check
+python -m ruff format --check dq_pipeline tests
+python -m ruff check dq_pipeline tests
+python -m pytest -q
+```
+
+GitHub Actions ejecuta las mismas comprobaciones desde la raíz del repositorio y prueba la demo incluida.
+
+Los nombres de tabla y de clave se validan como identificadores SQL antes de construir consultas. Si no se indica `--key`, la regla de duplicados por clave se omite. Los valores de texto vacíos se conservan como nulos para que el profiling los detecte, en lugar de convertirlos en el texto literal `nan`.
